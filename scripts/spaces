@@ -4,12 +4,14 @@ set -euo pipefail
 # spaces-listener: Record and transcribe X/Twitter Spaces
 # Usage: spaces listen <url> [options]
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 OUTPUT_DIR="$HOME/Desktop"
 WHISPER_MODEL="base"
 TRANSCRIBE=true
-PID_FILE="$HOME/.spaces-listener.pid"
-LOG_FILE=""
+SPACES_DIR="$HOME/.spaces-listener"
+
+# Ensure spaces directory exists
+mkdir -p "$SPACES_DIR"
 
 show_help() {
     cat << EOF
@@ -18,8 +20,9 @@ Record and transcribe X/Twitter Spaces
 
 USAGE:
     spaces listen <url> [options]    Start recording a Space
-    spaces status                    Check recording status
-    spaces stop                      Stop current recording
+    spaces list                      List all active recordings
+    spaces status [id]               Check recording status
+    spaces stop [id|all]             Stop recording(s)
     spaces transcribe <file>         Transcribe an audio file
     spaces help
 
@@ -31,16 +34,13 @@ OPTIONS:
 
 EXAMPLES:
     spaces listen "https://x.com/i/spaces/1ABC..."
-    spaces listen "https://x.com/i/spaces/1ABC..." --model medium
-    spaces status
-    spaces stop
+    spaces listen "https://x.com/i/spaces/2DEF..." --output ~/Spaces
+    spaces list
+    spaces stop 1
+    spaces stop all
 
 REQUIREMENTS:
     brew install yt-dlp ffmpeg openai-whisper
-
-VIDEO RECORDING:
-    For video, use QuickTime Player with BlackHole for audio capture.
-    See: https://github.com/jamesalmeida/spaces-listener#video-recording
 EOF
 }
 
@@ -75,66 +75,191 @@ extract_username() {
     fi
 }
 
-check_status() {
-    if [[ -f "$PID_FILE" ]]; then
-        local pid
-        pid=$(cat "$PID_FILE")
-        if ps -p "$pid" > /dev/null 2>&1; then
-            local log_file
-            log_file=$(cat "$HOME/.spaces-listener.log" 2>/dev/null || echo "")
-            echo "🎧 Recording in progress (PID: $pid)"
-            if [[ -n "$log_file" && -f "$log_file" ]]; then
-                echo ""
-                echo "Recent progress:"
-                tail -3 "$log_file" 2>/dev/null | grep -o "time=[0-9:.]* " | tail -1 || echo "   (starting...)"
+get_next_id() {
+    local max_id=0
+    for f in "$SPACES_DIR"/*.pid 2>/dev/null; do
+        if [[ -f "$f" ]]; then
+            local id
+            id=$(basename "$f" .pid)
+            if [[ "$id" =~ ^[0-9]+$ ]] && [[ "$id" -gt "$max_id" ]]; then
+                max_id="$id"
             fi
-            return 0
-        else
-            rm -f "$PID_FILE" "$HOME/.spaces-listener.log"
-            echo "No active recording (stale PID file cleaned up)"
-            return 1
         fi
-    else
-        echo "No active recording"
+    done
+    echo $((max_id + 1))
+}
+
+list_recordings() {
+    local found=false
+    echo "🎧 Active Recordings"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    for pid_file in "$SPACES_DIR"/*.pid 2>/dev/null; do
+        if [[ -f "$pid_file" ]]; then
+            local id
+            id=$(basename "$pid_file" .pid)
+            local pid
+            pid=$(cat "$pid_file")
+            local meta_file="$SPACES_DIR/${id}.meta"
+            
+            if ps -p "$pid" > /dev/null 2>&1; then
+                found=true
+                local username="unknown"
+                local output_file=""
+                local log_file=""
+                
+                if [[ -f "$meta_file" ]]; then
+                    username=$(grep "^username=" "$meta_file" 2>/dev/null | cut -d= -f2 || echo "unknown")
+                    output_file=$(grep "^output=" "$meta_file" 2>/dev/null | cut -d= -f2 || echo "")
+                    log_file=$(grep "^log=" "$meta_file" 2>/dev/null | cut -d= -f2 || echo "")
+                fi
+                
+                local progress=""
+                if [[ -n "$log_file" && -f "$log_file" ]]; then
+                    progress=$(grep -o "time=[0-9:.]*" "$log_file" 2>/dev/null | tail -1 | sed 's/time=//' || echo "")
+                fi
+                
+                echo ""
+                echo "  [$id] @${username}"
+                echo "      PID: $pid"
+                [[ -n "$progress" ]] && echo "      Recorded: $progress"
+                [[ -n "$output_file" ]] && echo "      File: $(basename "$output_file")"
+            else
+                # Clean up stale files
+                rm -f "$pid_file" "$meta_file"
+            fi
+        fi
+    done
+    
+    if [[ "$found" == false ]]; then
+        echo ""
+        echo "  No active recordings"
+    fi
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
+check_status() {
+    local target_id="${1:-}"
+    
+    if [[ -z "$target_id" ]]; then
+        list_recordings
+        return 0
+    fi
+    
+    local pid_file="$SPACES_DIR/${target_id}.pid"
+    local meta_file="$SPACES_DIR/${target_id}.meta"
+    
+    if [[ ! -f "$pid_file" ]]; then
+        echo "❌ Recording #$target_id not found"
         return 1
+    fi
+    
+    local pid
+    pid=$(cat "$pid_file")
+    
+    if ps -p "$pid" > /dev/null 2>&1; then
+        local username="unknown"
+        local output_file=""
+        local log_file=""
+        
+        if [[ -f "$meta_file" ]]; then
+            username=$(grep "^username=" "$meta_file" 2>/dev/null | cut -d= -f2 || echo "unknown")
+            output_file=$(grep "^output=" "$meta_file" 2>/dev/null | cut -d= -f2 || echo "")
+            log_file=$(grep "^log=" "$meta_file" 2>/dev/null | cut -d= -f2 || echo "")
+        fi
+        
+        echo "🎧 Recording #$target_id — @${username}"
+        echo "   PID: $pid"
+        echo "   Status: Running"
+        
+        if [[ -n "$log_file" && -f "$log_file" ]]; then
+            local progress
+            progress=$(grep -o "time=[0-9:.]*" "$log_file" 2>/dev/null | tail -1 | sed 's/time=//' || echo "")
+            [[ -n "$progress" ]] && echo "   Recorded: $progress"
+        fi
+        
+        [[ -n "$output_file" ]] && echo "   Output: $output_file"
+    else
+        echo "Recording #$target_id has stopped"
+        rm -f "$pid_file" "$meta_file"
     fi
 }
 
 stop_recording() {
-    if [[ -f "$PID_FILE" ]]; then
-        local pid
-        pid=$(cat "$PID_FILE")
-        if ps -p "$pid" > /dev/null 2>&1; then
-            echo "🛑 Stopping recording (PID: $pid)..."
-            kill "$pid" 2>/dev/null || true
-            sleep 2
-            
-            # Force kill if still running
-            if ps -p "$pid" > /dev/null 2>&1; then
-                kill -9 "$pid" 2>/dev/null || true
-            fi
-            
-            rm -f "$PID_FILE"
-            
-            # Rename .part file if it exists
-            local log_file
-            log_file=$(cat "$HOME/.spaces-listener.log" 2>/dev/null || echo "")
-            if [[ -n "$log_file" ]]; then
-                local base_file="${log_file%.log}.m4a"
-                if [[ -f "${base_file}.part" ]]; then
-                    mv "${base_file}.part" "$base_file"
-                    echo "✅ Saved: $base_file"
+    local target="${1:-}"
+    
+    if [[ -z "$target" ]]; then
+        echo "Usage: spaces stop <id|all>"
+        echo "       Run 'spaces list' to see recording IDs"
+        return 1
+    fi
+    
+    if [[ "$target" == "all" ]]; then
+        local stopped=0
+        for pid_file in "$SPACES_DIR"/*.pid 2>/dev/null; do
+            if [[ -f "$pid_file" ]]; then
+                local id
+                id=$(basename "$pid_file" .pid)
+                local pid
+                pid=$(cat "$pid_file")
+                
+                if ps -p "$pid" > /dev/null 2>&1; then
+                    echo "🛑 Stopping recording #$id (PID: $pid)..."
+                    kill "$pid" 2>/dev/null || true
+                    stopped=$((stopped + 1))
                 fi
+                
+                # Clean up and rename .part file
+                local meta_file="$SPACES_DIR/${id}.meta"
+                if [[ -f "$meta_file" ]]; then
+                    local output_file
+                    output_file=$(grep "^output=" "$meta_file" 2>/dev/null | cut -d= -f2 || echo "")
+                    if [[ -n "$output_file" && -f "${output_file}.part" ]]; then
+                        mv "${output_file}.part" "$output_file"
+                        echo "   Saved: $output_file"
+                    fi
+                fi
+                
+                rm -f "$pid_file" "$meta_file"
             fi
-            
-            rm -f "$HOME/.spaces-listener.log"
-            echo "Recording stopped."
+        done
+        
+        if [[ $stopped -eq 0 ]]; then
+            echo "No active recordings to stop"
         else
-            rm -f "$PID_FILE" "$HOME/.spaces-listener.log"
-            echo "No active recording (cleaned up stale files)"
+            echo "✅ Stopped $stopped recording(s)"
         fi
     else
-        echo "No active recording to stop"
+        local pid_file="$SPACES_DIR/${target}.pid"
+        local meta_file="$SPACES_DIR/${target}.meta"
+        
+        if [[ ! -f "$pid_file" ]]; then
+            echo "❌ Recording #$target not found"
+            return 1
+        fi
+        
+        local pid
+        pid=$(cat "$pid_file")
+        
+        if ps -p "$pid" > /dev/null 2>&1; then
+            echo "🛑 Stopping recording #$target (PID: $pid)..."
+            kill "$pid" 2>/dev/null || true
+            sleep 1
+            
+            # Rename .part file
+            if [[ -f "$meta_file" ]]; then
+                local output_file
+                output_file=$(grep "^output=" "$meta_file" 2>/dev/null | cut -d= -f2 || echo "")
+                if [[ -n "$output_file" && -f "${output_file}.part" ]]; then
+                    mv "${output_file}.part" "$output_file"
+                    echo "✅ Saved: $output_file"
+                fi
+            fi
+        fi
+        
+        rm -f "$pid_file" "$meta_file"
+        echo "Recording #$target stopped"
     fi
 }
 
@@ -175,69 +300,66 @@ listen() {
     local url="$1"
     local username="$2"
     
-    # Check if already recording
-    if [[ -f "$PID_FILE" ]]; then
-        local pid
-        pid=$(cat "$PID_FILE")
-        if ps -p "$pid" > /dev/null 2>&1; then
-            echo "❌ Already recording (PID: $pid)"
-            echo "   Use 'spaces stop' to stop the current recording first."
-            exit 1
-        else
-            rm -f "$PID_FILE"
-        fi
-    fi
+    local id
+    id=$(get_next_id)
     
     local date_str
     date_str=$(date +%Y-%m-%d_%H%M)
     local base_name="space_${username}_${date_str}"
     local audio_file="${OUTPUT_DIR}/${base_name}.m4a"
-    LOG_FILE="${OUTPUT_DIR}/${base_name}.log"
+    local log_file="${OUTPUT_DIR}/${base_name}.log"
     
-    echo "🎧 Starting Space recording..."
+    echo "🎧 Starting Space recording #$id..."
     echo "   URL: $url"
     echo "   Host: @${username}"
     echo "   Output: $audio_file"
-    echo "   Log: $LOG_FILE"
     echo ""
     
     # Start recording in background with nohup
     nohup yt-dlp -f "bestaudio[ext=m4a]/bestaudio" \
         --no-warnings \
         -o "$audio_file" \
-        "$url" > "$LOG_FILE" 2>&1 &
+        "$url" > "$log_file" 2>&1 &
     
     local pid=$!
-    echo "$pid" > "$PID_FILE"
-    echo "$LOG_FILE" > "$HOME/.spaces-listener.log"
+    
+    # Save PID and metadata
+    echo "$pid" > "$SPACES_DIR/${id}.pid"
+    cat > "$SPACES_DIR/${id}.meta" << EOF
+username=$username
+url=$url
+output=$audio_file
+log=$log_file
+started=$(date +%s)
+EOF
     
     # Wait a moment and verify it started
     sleep 3
     
     if ps -p "$pid" > /dev/null 2>&1; then
-        echo "✅ Recording started in background (PID: $pid)"
+        echo "✅ Recording #$id started (PID: $pid)"
         echo ""
-        echo "   The recording will continue until the Space ends."
+        echo "   Recording continues until the Space ends."
         echo "   You can close this terminal — recording persists."
         echo ""
         echo "   Commands:"
-        echo "   • spaces status     — check progress"
-        echo "   • spaces stop       — stop recording"
+        echo "   • spaces list       — see all recordings"
+        echo "   • spaces stop $id      — stop this recording"
         echo ""
         
         # Show initial progress
         sleep 2
-        if [[ -f "$LOG_FILE" ]]; then
+        if [[ -f "$log_file" ]]; then
             local progress
-            progress=$(grep -o "time=[0-9:.]* " "$LOG_FILE" 2>/dev/null | tail -1 || echo "")
+            progress=$(grep -o "time=[0-9:.]*" "$log_file" 2>/dev/null | tail -1 || echo "")
             if [[ -n "$progress" ]]; then
-                echo "   Current: $progress"
+                echo "   Progress: $progress"
             fi
         fi
     else
         echo "❌ Recording failed to start"
-        echo "   Check log: $LOG_FILE"
-        rm -f "$PID_FILE"
+        echo "   Check log: $log_file"
+        rm -f "$SPACES_DIR/${id}.pid" "$SPACES_DIR/${id}.meta"
         exit 1
     fi
 }
@@ -246,6 +368,7 @@ listen() {
 COMMAND=""
 URL=""
 AUDIO_FILE=""
+TARGET_ID=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -253,13 +376,25 @@ while [[ $# -gt 0 ]]; do
             COMMAND="listen"
             shift
             ;;
+        list)
+            COMMAND="list"
+            shift
+            ;;
         status)
             COMMAND="status"
             shift
+            if [[ $# -gt 0 && ! "$1" =~ ^- ]]; then
+                TARGET_ID="$1"
+                shift
+            fi
             ;;
         stop)
             COMMAND="stop"
             shift
+            if [[ $# -gt 0 && ! "$1" =~ ^- ]]; then
+                TARGET_ID="$1"
+                shift
+            fi
             ;;
         transcribe)
             COMMAND="transcribe"
@@ -304,12 +439,16 @@ done
 
 # Handle commands
 case "$COMMAND" in
+    list)
+        list_recordings
+        exit 0
+        ;;
     status)
-        check_status
+        check_status "$TARGET_ID"
         exit $?
         ;;
     stop)
-        stop_recording
+        stop_recording "$TARGET_ID"
         exit 0
         ;;
     transcribe)
