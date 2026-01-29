@@ -1,0 +1,285 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# spaces-listener: Record and transcribe X/Twitter Spaces
+# Usage: spaces listen <url> [options]
+
+VERSION="1.0.0"
+OUTPUT_DIR="$HOME/Desktop"
+WHISPER_MODEL="base"
+VIDEO_MODE=false
+TRANSCRIBE=true
+
+show_help() {
+    cat << EOF
+spaces-listener v${VERSION}
+Record and transcribe X/Twitter Spaces
+
+USAGE:
+    spaces listen <url> [options]
+    spaces help
+
+OPTIONS:
+    --video             Record video (screen + audio via BlackHole)
+    --output, -o DIR    Output directory (default: ~/Desktop)
+    --model MODEL       Whisper model: tiny|base|small|medium|large (default: base)
+    --no-transcribe     Skip transcription
+    --help, -h          Show this help
+
+EXAMPLES:
+    spaces listen "https://x.com/i/spaces/1ABC..."
+    spaces listen "https://x.com/i/spaces/1ABC..." --video
+    spaces listen "https://x.com/i/spaces/1ABC..." --model medium --output ~/Spaces
+
+REQUIREMENTS:
+    yt-dlp, ffmpeg, whisper (brew install yt-dlp ffmpeg openai-whisper)
+    BlackHole (video mode): brew install blackhole-2ch
+EOF
+}
+
+check_deps() {
+    local missing=()
+    command -v yt-dlp >/dev/null || missing+=("yt-dlp")
+    command -v ffmpeg >/dev/null || missing+=("ffmpeg")
+    
+    if [[ "$TRANSCRIBE" == true ]]; then
+        command -v whisper >/dev/null || missing+=("openai-whisper")
+    fi
+    
+    if [[ "$VIDEO_MODE" == true ]]; then
+        if ! system_profiler SPAudioDataType 2>/dev/null | grep -q "BlackHole"; then
+            echo "⚠️  Warning: BlackHole not detected. Video mode requires BlackHole for audio capture."
+            echo "   Install: brew install blackhole-2ch"
+            echo "   Then configure in Audio MIDI Setup → Create Multi-Output Device"
+        fi
+    fi
+    
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "❌ Missing dependencies: ${missing[*]}"
+        echo "   Install: brew install ${missing[*]}"
+        exit 1
+    fi
+}
+
+extract_username() {
+    local url="$1"
+    # Try to get username from Space metadata via yt-dlp
+    local info
+    info=$(yt-dlp --dump-json "$url" 2>/dev/null | head -1) || true
+    
+    if [[ -n "$info" ]]; then
+        local uploader
+        uploader=$(echo "$info" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('uploader','unknown'))" 2>/dev/null) || uploader="unknown"
+        echo "$uploader"
+    else
+        echo "space"
+    fi
+}
+
+listen_audio() {
+    local url="$1"
+    local username="$2"
+    local date_str
+    date_str=$(date +%Y-%m-%d_%H%M)
+    local base_name="space_${username}_${date_str}"
+    local audio_file="${OUTPUT_DIR}/${base_name}.m4a"
+    
+    echo "🎧 Recording Space (audio mode)..."
+    echo "   URL: $url"
+    echo "   Output: $audio_file"
+    echo ""
+    echo "   Press Ctrl+C to stop recording (for live Spaces)"
+    echo ""
+    
+    # Download audio
+    yt-dlp -f "bestaudio[ext=m4a]/bestaudio" \
+        --no-warnings \
+        -o "$audio_file" \
+        "$url" || {
+            # If direct download fails, try with ffmpeg
+            echo "⚠️  Direct download failed, trying ffmpeg extraction..."
+            local m3u8_url
+            m3u8_url=$(yt-dlp -g "$url" 2>/dev/null | head -1)
+            ffmpeg -i "$m3u8_url" -c copy "$audio_file" -y
+        }
+    
+    echo ""
+    echo "✅ Audio saved: $audio_file"
+    
+    # Transcribe
+    if [[ "$TRANSCRIBE" == true ]]; then
+        echo ""
+        echo "📝 Transcribing with Whisper (model: $WHISPER_MODEL)..."
+        whisper "$audio_file" \
+            --model "$WHISPER_MODEL" \
+            --output_format txt \
+            --output_dir "$OUTPUT_DIR"
+        
+        local transcript="${OUTPUT_DIR}/${base_name}.txt"
+        if [[ -f "$transcript" ]]; then
+            echo "✅ Transcript saved: $transcript"
+        fi
+    fi
+    
+    echo ""
+    echo "🎉 Done!"
+    echo "   Audio: $audio_file"
+    [[ "$TRANSCRIBE" == true ]] && echo "   Transcript: ${OUTPUT_DIR}/${base_name}.txt"
+}
+
+listen_video() {
+    local url="$1"
+    local username="$2"
+    local date_str
+    date_str=$(date +%Y-%m-%d_%H%M)
+    local base_name="space_${username}_${date_str}"
+    local video_file="${OUTPUT_DIR}/${base_name}.mp4"
+    local audio_file="${OUTPUT_DIR}/${base_name}.m4a"
+    
+    echo "🎬 Recording Space (video mode)..."
+    echo "   URL: $url"
+    echo "   Output: $video_file"
+    echo ""
+    echo "   This will:"
+    echo "   1. Open the Space in your browser"
+    echo "   2. Record screen + BlackHole audio"
+    echo ""
+    echo "   Press Ctrl+C to stop recording"
+    echo ""
+    
+    # Open the Space in browser
+    open "$url"
+    sleep 3  # Wait for browser to load
+    
+    # Get screen dimensions
+    local screen_size
+    screen_size=$(system_profiler SPDisplaysDataType | grep Resolution | head -1 | awk '{print $2"x"$4}')
+    
+    # Find BlackHole device index
+    local audio_device
+    audio_device=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep -i "blackhole" | head -1 | sed -n 's/.*\[\([0-9]*\)\].*/\1/p') || audio_device=""
+    
+    if [[ -z "$audio_device" ]]; then
+        echo "⚠️  BlackHole not found. Recording video without audio."
+        echo "   Configure BlackHole in Audio MIDI Setup for audio capture."
+        
+        # Record video only
+        ffmpeg -f avfoundation -framerate 30 -i "1" \
+            -c:v h264 -preset fast -crf 23 \
+            "$video_file" -y
+    else
+        echo "🔊 Using BlackHole for audio capture (device: $audio_device)"
+        
+        # Record video + audio
+        ffmpeg -f avfoundation -framerate 30 -i "1:$audio_device" \
+            -c:v h264 -preset fast -crf 23 \
+            -c:a aac -b:a 128k \
+            "$video_file" -y
+    fi
+    
+    echo ""
+    echo "✅ Video saved: $video_file"
+    
+    # Extract audio for transcription
+    if [[ "$TRANSCRIBE" == true ]]; then
+        echo ""
+        echo "🔊 Extracting audio..."
+        ffmpeg -i "$video_file" -vn -c:a aac "$audio_file" -y 2>/dev/null
+        
+        echo "📝 Transcribing with Whisper (model: $WHISPER_MODEL)..."
+        whisper "$audio_file" \
+            --model "$WHISPER_MODEL" \
+            --output_format txt \
+            --output_dir "$OUTPUT_DIR"
+        
+        echo "✅ Transcript saved: ${OUTPUT_DIR}/${base_name}.txt"
+    fi
+    
+    echo ""
+    echo "🎉 Done!"
+    echo "   Video: $video_file"
+    echo "   Audio: $audio_file"
+    [[ "$TRANSCRIBE" == true ]] && echo "   Transcript: ${OUTPUT_DIR}/${base_name}.txt"
+}
+
+# Parse arguments
+COMMAND=""
+URL=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        listen)
+            COMMAND="listen"
+            shift
+            ;;
+        help|--help|-h)
+            show_help
+            exit 0
+            ;;
+        --version|-v)
+            echo "spaces-listener v${VERSION}"
+            exit 0
+            ;;
+        --video)
+            VIDEO_MODE=true
+            shift
+            ;;
+        --output|-o)
+            OUTPUT_DIR="$2"
+            shift 2
+            ;;
+        --model)
+            WHISPER_MODEL="$2"
+            shift 2
+            ;;
+        --no-transcribe)
+            TRANSCRIBE=false
+            shift
+            ;;
+        http*|https*)
+            URL="$1"
+            shift
+            ;;
+        *)
+            if [[ -z "$URL" && "$1" =~ ^[0-9a-zA-Z] ]]; then
+                URL="$1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+# Validate
+if [[ -z "$COMMAND" || "$COMMAND" != "listen" ]]; then
+    if [[ -n "$URL" ]]; then
+        COMMAND="listen"
+    else
+        show_help
+        exit 1
+    fi
+fi
+
+if [[ -z "$URL" ]]; then
+    echo "❌ Error: No Space URL provided"
+    echo ""
+    show_help
+    exit 1
+fi
+
+# Ensure output directory exists
+mkdir -p "$OUTPUT_DIR"
+
+# Check dependencies
+check_deps
+
+# Extract username
+echo "🔍 Fetching Space info..."
+USERNAME=$(extract_username "$URL")
+echo "   Host: @${USERNAME}"
+
+# Run appropriate mode
+if [[ "$VIDEO_MODE" == true ]]; then
+    listen_video "$URL" "$USERNAME"
+else
+    listen_audio "$URL" "$USERNAME"
+fi
