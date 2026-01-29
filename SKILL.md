@@ -5,17 +5,22 @@ Record and transcribe X/Twitter Spaces — live or replays. Zero API costs.
 ## Commands
 
 ```bash
-# Audio only (recommended - fully automated)
+# Start recording (runs in background until Space ends)
 spaces listen <url>
 
-# Specify output directory
+# Check recording status
+spaces status
+
+# Stop recording
+spaces stop
+
+# Transcribe an existing audio file
+spaces transcribe ~/Desktop/space.m4a
+
+# Options
 spaces listen <url> --output ~/Spaces
-
-# Skip transcription
-spaces listen <url> --no-transcribe
-
-# Use larger Whisper model for better accuracy
 spaces listen <url> --model medium
+spaces listen <url> --no-transcribe
 ```
 
 ## Requirements
@@ -24,17 +29,19 @@ spaces listen <url> --model medium
 - **ffmpeg** — `brew install ffmpeg`  
 - **whisper** — `brew install openai-whisper`
 
-## What It Does
+## How It Works
 
-1. Downloads audio directly via yt-dlp (works for live + replay)
-2. Transcribes locally with Whisper (no API key needed)
-3. Saves audio + transcript to output directory
+1. `spaces listen` starts recording in the background using `nohup`
+2. Recording continues until the Space ends (or you run `spaces stop`)
+3. You can close your terminal — recording persists
+4. When done, run `spaces transcribe <file>` to generate transcript
 
 ## Output
 
 Files saved to `--output` dir (default: `~/Desktop`):
 - `space_<username>_<date>.m4a` — audio file
-- `space_<username>_<date>.txt` — transcript
+- `space_<username>_<date>.log` — download progress log
+- `space_<username>_<date>.txt` — transcript (after transcribing)
 
 ## Whisper Models
 
@@ -48,38 +55,21 @@ Files saved to `--output` dir (default: `~/Desktop`):
 
 ## Video Recording
 
-For video clips of Spaces (showing the UI, speakers, waveforms), use one of these manual approaches:
-
-**QuickTime Player (easiest):**
-1. Set system audio output to your Multi-Output Device (with BlackHole)
-2. File → New Screen Recording
-3. Click dropdown next to record button, select "BlackHole 2ch" for audio
-4. Record your screen while the Space plays
-
-**OBS (most powerful):**
-```bash
-brew install --cask obs
-```
-Configure Desktop Audio to capture BlackHole.
-
-**Why not automated?** macOS requires Screen Recording permission granted to a proper .app bundle. CLI tools (node, ffmpeg) running as background services can't easily get this permission.
+For video clips of Spaces, use QuickTime Player with BlackHole audio routing.
+See the README for setup instructions.
 
 ## Examples
 
 ```bash
-# Record a live Space (records until it ends or you Ctrl+C)
+# Record a live Space (background, persists until Space ends)
 spaces listen "https://x.com/i/spaces/1ABC..."
 
-# High-quality transcription for important content
-spaces listen "https://x.com/i/spaces/1ABC..." --model large
+# Check if recording is still going
+spaces status
 
-# Save to organized folder
-spaces listen "https://x.com/i/spaces/1ABC..." -o ~/Spaces/Tesla
+# Stop early if needed
+spaces stop
+
+# Transcribe when done
+spaces transcribe ~/Desktop/space_username_2026-01-28.m4a --model large
 ```
-
-## Notes
-
-- Live Spaces record in real-time until they end
-- Replays download at full speed
-- All processing is local — no API costs, no rate limits
-- First run downloads the Whisper model (~142MB for base)

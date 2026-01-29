@@ -4,10 +4,12 @@ set -euo pipefail
 # spaces-listener: Record and transcribe X/Twitter Spaces
 # Usage: spaces listen <url> [options]
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 OUTPUT_DIR="$HOME/Desktop"
 WHISPER_MODEL="base"
 TRANSCRIBE=true
+PID_FILE="$HOME/.spaces-listener.pid"
+LOG_FILE=""
 
 show_help() {
     cat << EOF
@@ -15,19 +17,23 @@ spaces-listener v${VERSION}
 Record and transcribe X/Twitter Spaces
 
 USAGE:
-    spaces listen <url> [options]
+    spaces listen <url> [options]    Start recording a Space
+    spaces status                    Check recording status
+    spaces stop                      Stop current recording
+    spaces transcribe <file>         Transcribe an audio file
     spaces help
 
 OPTIONS:
     --output, -o DIR    Output directory (default: ~/Desktop)
     --model MODEL       Whisper model: tiny|base|small|medium|large (default: base)
-    --no-transcribe     Skip transcription
+    --no-transcribe     Skip auto-transcription when recording ends
     --help, -h          Show this help
 
 EXAMPLES:
     spaces listen "https://x.com/i/spaces/1ABC..."
     spaces listen "https://x.com/i/spaces/1ABC..." --model medium
-    spaces listen "https://x.com/i/spaces/1ABC..." -o ~/Spaces
+    spaces status
+    spaces stop
 
 REQUIREMENTS:
     brew install yt-dlp ffmpeg openai-whisper
@@ -56,14 +62,12 @@ check_deps() {
 
 extract_username() {
     local url="$1"
-    # Try to get username from Space metadata via yt-dlp
     local info
     info=$(yt-dlp --dump-json "$url" 2>/dev/null | head -1) || true
     
     if [[ -n "$info" ]]; then
         local uploader
         uploader=$(echo "$info" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('uploader','unknown'))" 2>/dev/null) || uploader="unknown"
-        # Sanitize username for filename
         uploader=$(echo "$uploader" | tr -cd '[:alnum:]_-' | head -c 30)
         echo "$uploader"
     else
@@ -71,96 +75,199 @@ extract_username() {
     fi
 }
 
+check_status() {
+    if [[ -f "$PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$PID_FILE")
+        if ps -p "$pid" > /dev/null 2>&1; then
+            local log_file
+            log_file=$(cat "$HOME/.spaces-listener.log" 2>/dev/null || echo "")
+            echo "🎧 Recording in progress (PID: $pid)"
+            if [[ -n "$log_file" && -f "$log_file" ]]; then
+                echo ""
+                echo "Recent progress:"
+                tail -3 "$log_file" 2>/dev/null | grep -o "time=[0-9:.]* " | tail -1 || echo "   (starting...)"
+            fi
+            return 0
+        else
+            rm -f "$PID_FILE" "$HOME/.spaces-listener.log"
+            echo "No active recording (stale PID file cleaned up)"
+            return 1
+        fi
+    else
+        echo "No active recording"
+        return 1
+    fi
+}
+
+stop_recording() {
+    if [[ -f "$PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$PID_FILE")
+        if ps -p "$pid" > /dev/null 2>&1; then
+            echo "🛑 Stopping recording (PID: $pid)..."
+            kill "$pid" 2>/dev/null || true
+            sleep 2
+            
+            # Force kill if still running
+            if ps -p "$pid" > /dev/null 2>&1; then
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+            
+            rm -f "$PID_FILE"
+            
+            # Rename .part file if it exists
+            local log_file
+            log_file=$(cat "$HOME/.spaces-listener.log" 2>/dev/null || echo "")
+            if [[ -n "$log_file" ]]; then
+                local base_file="${log_file%.log}.m4a"
+                if [[ -f "${base_file}.part" ]]; then
+                    mv "${base_file}.part" "$base_file"
+                    echo "✅ Saved: $base_file"
+                fi
+            fi
+            
+            rm -f "$HOME/.spaces-listener.log"
+            echo "Recording stopped."
+        else
+            rm -f "$PID_FILE" "$HOME/.spaces-listener.log"
+            echo "No active recording (cleaned up stale files)"
+        fi
+    else
+        echo "No active recording to stop"
+    fi
+}
+
+transcribe_file() {
+    local audio_file="$1"
+    
+    if [[ ! -f "$audio_file" ]]; then
+        echo "❌ File not found: $audio_file"
+        exit 1
+    fi
+    
+    echo "📝 Transcribing: $audio_file"
+    echo "   Model: $WHISPER_MODEL"
+    echo ""
+    
+    local output_dir
+    output_dir=$(dirname "$audio_file")
+    
+    whisper "$audio_file" \
+        --model "$WHISPER_MODEL" \
+        --output_format txt \
+        --output_dir "$output_dir" 2>&1 | grep -v "^$" | tail -10
+    
+    local base_name
+    base_name=$(basename "$audio_file" .m4a)
+    local transcript="${output_dir}/${base_name}.txt"
+    
+    if [[ -f "$transcript" ]]; then
+        echo ""
+        echo "✅ Transcript saved: $transcript"
+        local words
+        words=$(wc -w < "$transcript" | tr -d ' ')
+        echo "   Words: $words"
+    fi
+}
+
 listen() {
     local url="$1"
     local username="$2"
+    
+    # Check if already recording
+    if [[ -f "$PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$PID_FILE")
+        if ps -p "$pid" > /dev/null 2>&1; then
+            echo "❌ Already recording (PID: $pid)"
+            echo "   Use 'spaces stop' to stop the current recording first."
+            exit 1
+        else
+            rm -f "$PID_FILE"
+        fi
+    fi
+    
     local date_str
     date_str=$(date +%Y-%m-%d_%H%M)
     local base_name="space_${username}_${date_str}"
     local audio_file="${OUTPUT_DIR}/${base_name}.m4a"
+    LOG_FILE="${OUTPUT_DIR}/${base_name}.log"
     
-    echo "🎧 Recording Space..."
+    echo "🎧 Starting Space recording..."
     echo "   URL: $url"
     echo "   Host: @${username}"
     echo "   Output: $audio_file"
-    echo ""
-    echo "   For live Spaces: recording continues until the Space ends."
-    echo "   Press Ctrl+C to stop early."
+    echo "   Log: $LOG_FILE"
     echo ""
     
-    # Download audio
-    yt-dlp -f "bestaudio[ext=m4a]/bestaudio" \
+    # Start recording in background with nohup
+    nohup yt-dlp -f "bestaudio[ext=m4a]/bestaudio" \
         --no-warnings \
-        --no-progress \
         -o "$audio_file" \
-        "$url" 2>&1 || {
-            # If direct download fails, try with ffmpeg
-            echo "⚠️  Direct download issue, trying alternate method..."
-            local m3u8_url
-            m3u8_url=$(yt-dlp -g "$url" 2>/dev/null | head -1)
-            if [[ -n "$m3u8_url" ]]; then
-                ffmpeg -i "$m3u8_url" -c copy "$audio_file" -y 2>/dev/null
-            else
-                echo "❌ Could not download Space. It may be unavailable."
-                exit 1
-            fi
-        }
+        "$url" > "$LOG_FILE" 2>&1 &
     
-    # Check if file was created
-    if [[ ! -f "$audio_file" ]]; then
-        echo "❌ Audio file not created. The Space may be unavailable."
+    local pid=$!
+    echo "$pid" > "$PID_FILE"
+    echo "$LOG_FILE" > "$HOME/.spaces-listener.log"
+    
+    # Wait a moment and verify it started
+    sleep 3
+    
+    if ps -p "$pid" > /dev/null 2>&1; then
+        echo "✅ Recording started in background (PID: $pid)"
+        echo ""
+        echo "   The recording will continue until the Space ends."
+        echo "   You can close this terminal — recording persists."
+        echo ""
+        echo "   Commands:"
+        echo "   • spaces status     — check progress"
+        echo "   • spaces stop       — stop recording"
+        echo ""
+        
+        # Show initial progress
+        sleep 2
+        if [[ -f "$LOG_FILE" ]]; then
+            local progress
+            progress=$(grep -o "time=[0-9:.]* " "$LOG_FILE" 2>/dev/null | tail -1 || echo "")
+            if [[ -n "$progress" ]]; then
+                echo "   Current: $progress"
+            fi
+        fi
+    else
+        echo "❌ Recording failed to start"
+        echo "   Check log: $LOG_FILE"
+        rm -f "$PID_FILE"
         exit 1
     fi
-    
-    echo ""
-    echo "✅ Audio saved: $audio_file"
-    
-    # Get file size
-    local size
-    size=$(ls -lh "$audio_file" | awk '{print $5}')
-    echo "   Size: $size"
-    
-    # Transcribe
-    if [[ "$TRANSCRIBE" == true ]]; then
-        echo ""
-        echo "📝 Transcribing with Whisper (model: $WHISPER_MODEL)..."
-        echo "   This may take a moment..."
-        
-        whisper "$audio_file" \
-            --model "$WHISPER_MODEL" \
-            --output_format txt \
-            --output_dir "$OUTPUT_DIR" 2>&1 | grep -v "^$" | tail -5
-        
-        local transcript="${OUTPUT_DIR}/${base_name}.txt"
-        if [[ -f "$transcript" ]]; then
-            echo ""
-            echo "✅ Transcript saved: $transcript"
-            
-            # Show word count
-            local words
-            words=$(wc -w < "$transcript" | tr -d ' ')
-            echo "   Words: $words"
-        fi
-    fi
-    
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "🎉 Done!"
-    echo ""
-    echo "   Audio:      $audio_file"
-    [[ "$TRANSCRIBE" == true ]] && echo "   Transcript: ${OUTPUT_DIR}/${base_name}.txt"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
 # Parse arguments
 COMMAND=""
 URL=""
+AUDIO_FILE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         listen)
             COMMAND="listen"
             shift
+            ;;
+        status)
+            COMMAND="status"
+            shift
+            ;;
+        stop)
+            COMMAND="stop"
+            shift
+            ;;
+        transcribe)
+            COMMAND="transcribe"
+            shift
+            if [[ $# -gt 0 && ! "$1" =~ ^- ]]; then
+                AUDIO_FILE="$1"
+                shift
+            fi
             ;;
         help|--help|-h)
             show_help
@@ -195,22 +302,33 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Validate
-if [[ -z "$COMMAND" || "$COMMAND" != "listen" ]]; then
-    if [[ -n "$URL" ]]; then
+# Handle commands
+case "$COMMAND" in
+    status)
+        check_status
+        exit $?
+        ;;
+    stop)
+        stop_recording
+        exit 0
+        ;;
+    transcribe)
+        if [[ -z "$AUDIO_FILE" ]]; then
+            echo "❌ Usage: spaces transcribe <audio_file>"
+            exit 1
+        fi
+        check_deps
+        transcribe_file "$AUDIO_FILE"
+        exit 0
+        ;;
+    listen|"")
+        if [[ -z "$URL" ]]; then
+            show_help
+            exit 1
+        fi
         COMMAND="listen"
-    else
-        show_help
-        exit 1
-    fi
-fi
-
-if [[ -z "$URL" ]]; then
-    echo "❌ Error: No Space URL provided"
-    echo ""
-    show_help
-    exit 1
-fi
+        ;;
+esac
 
 # Ensure output directory exists
 mkdir -p "$OUTPUT_DIR"
@@ -222,5 +340,5 @@ check_deps
 echo "🔍 Fetching Space info..."
 USERNAME=$(extract_username "$URL")
 
-# Run
+# Start recording
 listen "$URL" "$USERNAME"
