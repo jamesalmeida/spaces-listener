@@ -4,10 +4,9 @@ set -euo pipefail
 # spaces-listener: Record and transcribe X/Twitter Spaces
 # Usage: spaces listen <url> [options]
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 OUTPUT_DIR="$HOME/Desktop"
 WHISPER_MODEL="base"
-VIDEO_MODE=false
 TRANSCRIBE=true
 
 show_help() {
@@ -20,7 +19,6 @@ USAGE:
     spaces help
 
 OPTIONS:
-    --video             Record video (screen + audio via BlackHole)
     --output, -o DIR    Output directory (default: ~/Desktop)
     --model MODEL       Whisper model: tiny|base|small|medium|large (default: base)
     --no-transcribe     Skip transcription
@@ -28,12 +26,15 @@ OPTIONS:
 
 EXAMPLES:
     spaces listen "https://x.com/i/spaces/1ABC..."
-    spaces listen "https://x.com/i/spaces/1ABC..." --video
-    spaces listen "https://x.com/i/spaces/1ABC..." --model medium --output ~/Spaces
+    spaces listen "https://x.com/i/spaces/1ABC..." --model medium
+    spaces listen "https://x.com/i/spaces/1ABC..." -o ~/Spaces
 
 REQUIREMENTS:
-    yt-dlp, ffmpeg, whisper (brew install yt-dlp ffmpeg openai-whisper)
-    BlackHole (video mode): brew install blackhole-2ch
+    brew install yt-dlp ffmpeg openai-whisper
+
+VIDEO RECORDING:
+    For video, use QuickTime Player with BlackHole for audio capture.
+    See: https://github.com/jamesalmeida/spaces-listener#video-recording
 EOF
 }
 
@@ -44,14 +45,6 @@ check_deps() {
     
     if [[ "$TRANSCRIBE" == true ]]; then
         command -v whisper >/dev/null || missing+=("openai-whisper")
-    fi
-    
-    if [[ "$VIDEO_MODE" == true ]]; then
-        if ! system_profiler SPAudioDataType 2>/dev/null | grep -q "BlackHole"; then
-            echo "⚠️  Warning: BlackHole not detected. Video mode requires BlackHole for audio capture."
-            echo "   Install: brew install blackhole-2ch"
-            echo "   Then configure in Audio MIDI Setup → Create Multi-Output Device"
-        fi
     fi
     
     if [[ ${#missing[@]} -gt 0 ]]; then
@@ -70,13 +63,15 @@ extract_username() {
     if [[ -n "$info" ]]; then
         local uploader
         uploader=$(echo "$info" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('uploader','unknown'))" 2>/dev/null) || uploader="unknown"
+        # Sanitize username for filename
+        uploader=$(echo "$uploader" | tr -cd '[:alnum:]_-' | head -c 30)
         echo "$uploader"
     else
         echo "space"
     fi
 }
 
-listen_audio() {
+listen() {
     local url="$1"
     local username="$2"
     local date_str
@@ -84,122 +79,77 @@ listen_audio() {
     local base_name="space_${username}_${date_str}"
     local audio_file="${OUTPUT_DIR}/${base_name}.m4a"
     
-    echo "🎧 Recording Space (audio mode)..."
+    echo "🎧 Recording Space..."
     echo "   URL: $url"
+    echo "   Host: @${username}"
     echo "   Output: $audio_file"
     echo ""
-    echo "   Press Ctrl+C to stop recording (for live Spaces)"
+    echo "   For live Spaces: recording continues until the Space ends."
+    echo "   Press Ctrl+C to stop early."
     echo ""
     
     # Download audio
     yt-dlp -f "bestaudio[ext=m4a]/bestaudio" \
         --no-warnings \
+        --no-progress \
         -o "$audio_file" \
-        "$url" || {
+        "$url" 2>&1 || {
             # If direct download fails, try with ffmpeg
-            echo "⚠️  Direct download failed, trying ffmpeg extraction..."
+            echo "⚠️  Direct download issue, trying alternate method..."
             local m3u8_url
             m3u8_url=$(yt-dlp -g "$url" 2>/dev/null | head -1)
-            ffmpeg -i "$m3u8_url" -c copy "$audio_file" -y
+            if [[ -n "$m3u8_url" ]]; then
+                ffmpeg -i "$m3u8_url" -c copy "$audio_file" -y 2>/dev/null
+            else
+                echo "❌ Could not download Space. It may be unavailable."
+                exit 1
+            fi
         }
+    
+    # Check if file was created
+    if [[ ! -f "$audio_file" ]]; then
+        echo "❌ Audio file not created. The Space may be unavailable."
+        exit 1
+    fi
     
     echo ""
     echo "✅ Audio saved: $audio_file"
+    
+    # Get file size
+    local size
+    size=$(ls -lh "$audio_file" | awk '{print $5}')
+    echo "   Size: $size"
     
     # Transcribe
     if [[ "$TRANSCRIBE" == true ]]; then
         echo ""
         echo "📝 Transcribing with Whisper (model: $WHISPER_MODEL)..."
+        echo "   This may take a moment..."
+        
         whisper "$audio_file" \
             --model "$WHISPER_MODEL" \
             --output_format txt \
-            --output_dir "$OUTPUT_DIR"
+            --output_dir "$OUTPUT_DIR" 2>&1 | grep -v "^$" | tail -5
         
         local transcript="${OUTPUT_DIR}/${base_name}.txt"
         if [[ -f "$transcript" ]]; then
+            echo ""
             echo "✅ Transcript saved: $transcript"
+            
+            # Show word count
+            local words
+            words=$(wc -w < "$transcript" | tr -d ' ')
+            echo "   Words: $words"
         fi
     fi
     
     echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "🎉 Done!"
-    echo "   Audio: $audio_file"
+    echo ""
+    echo "   Audio:      $audio_file"
     [[ "$TRANSCRIBE" == true ]] && echo "   Transcript: ${OUTPUT_DIR}/${base_name}.txt"
-}
-
-listen_video() {
-    local url="$1"
-    local username="$2"
-    local date_str
-    date_str=$(date +%Y-%m-%d_%H%M)
-    local base_name="space_${username}_${date_str}"
-    local video_file="${OUTPUT_DIR}/${base_name}.mp4"
-    local audio_file="${OUTPUT_DIR}/${base_name}.m4a"
-    
-    echo "🎬 Recording Space (video mode)..."
-    echo "   URL: $url"
-    echo "   Output: $video_file"
-    echo ""
-    echo "   This will:"
-    echo "   1. Open the Space in your browser"
-    echo "   2. Record screen + BlackHole audio"
-    echo ""
-    echo "   Press Ctrl+C to stop recording"
-    echo ""
-    
-    # Open the Space in browser
-    open "$url"
-    sleep 3  # Wait for browser to load
-    
-    # Get screen dimensions
-    local screen_size
-    screen_size=$(system_profiler SPDisplaysDataType | grep Resolution | head -1 | awk '{print $2"x"$4}')
-    
-    # Find BlackHole device index
-    local audio_device
-    audio_device=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep -i "blackhole" | head -1 | sed -n 's/.*\[\([0-9]*\)\].*/\1/p') || audio_device=""
-    
-    if [[ -z "$audio_device" ]]; then
-        echo "⚠️  BlackHole not found. Recording video without audio."
-        echo "   Configure BlackHole in Audio MIDI Setup for audio capture."
-        
-        # Record video only
-        ffmpeg -f avfoundation -framerate 30 -i "1" \
-            -c:v h264 -preset fast -crf 23 \
-            "$video_file" -y
-    else
-        echo "🔊 Using BlackHole for audio capture (device: $audio_device)"
-        
-        # Record video + audio
-        ffmpeg -f avfoundation -framerate 30 -i "1:$audio_device" \
-            -c:v h264 -preset fast -crf 23 \
-            -c:a aac -b:a 128k \
-            "$video_file" -y
-    fi
-    
-    echo ""
-    echo "✅ Video saved: $video_file"
-    
-    # Extract audio for transcription
-    if [[ "$TRANSCRIBE" == true ]]; then
-        echo ""
-        echo "🔊 Extracting audio..."
-        ffmpeg -i "$video_file" -vn -c:a aac "$audio_file" -y 2>/dev/null
-        
-        echo "📝 Transcribing with Whisper (model: $WHISPER_MODEL)..."
-        whisper "$audio_file" \
-            --model "$WHISPER_MODEL" \
-            --output_format txt \
-            --output_dir "$OUTPUT_DIR"
-        
-        echo "✅ Transcript saved: ${OUTPUT_DIR}/${base_name}.txt"
-    fi
-    
-    echo ""
-    echo "🎉 Done!"
-    echo "   Video: $video_file"
-    echo "   Audio: $audio_file"
-    [[ "$TRANSCRIBE" == true ]] && echo "   Transcript: ${OUTPUT_DIR}/${base_name}.txt"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
 # Parse arguments
@@ -219,10 +169,6 @@ while [[ $# -gt 0 ]]; do
         --version|-v)
             echo "spaces-listener v${VERSION}"
             exit 0
-            ;;
-        --video)
-            VIDEO_MODE=true
-            shift
             ;;
         --output|-o)
             OUTPUT_DIR="$2"
@@ -275,11 +221,6 @@ check_deps
 # Extract username
 echo "🔍 Fetching Space info..."
 USERNAME=$(extract_username "$URL")
-echo "   Host: @${USERNAME}"
 
-# Run appropriate mode
-if [[ "$VIDEO_MODE" == true ]]; then
-    listen_video "$URL" "$USERNAME"
-else
-    listen_audio "$URL" "$USERNAME"
-fi
+# Run
+listen "$URL" "$USERNAME"
