@@ -1,6 +1,14 @@
+---
+name: spaces-listener
+description: Record, transcribe, and summarize X/Twitter Spaces — live or replays. Auto-downloads audio via yt-dlp, transcribes with Whisper, and generates AI summaries.
+version: 1.4.0
+author: jamesalmeida
+tags: [twitter, x, spaces, transcription, summarization, audio, recording]
+---
+
 # spaces-listener
 
-Record and transcribe X/Twitter Spaces — live or replays. Supports multiple concurrent recordings.
+Record, transcribe, and summarize X/Twitter Spaces — live or replays. Supports multiple concurrent recordings.
 
 ## Commands
 
