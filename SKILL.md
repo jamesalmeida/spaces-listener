@@ -24,6 +24,12 @@ spaces stop all
 
 # Transcribe when done
 spaces transcribe ~/Desktop/space.m4a --model medium
+
+# Summarize an existing transcript
+spaces summarize ~/Desktop/space_transcript.txt
+
+# Skip summarization
+spaces transcribe ~/Desktop/space.m4a --no-summarize
 ```
 
 ## Requirements
@@ -32,6 +38,8 @@ spaces transcribe ~/Desktop/space.m4a --model medium
 brew install yt-dlp ffmpeg openai-whisper
 ```
 
+For summaries, set `OPENAI_API_KEY` (transcription still works without it).
+
 ## How It Works
 
 1. Each `spaces listen` starts a new background recording with a unique ID
@@ -39,6 +47,7 @@ brew install yt-dlp ffmpeg openai-whisper
 3. Run `spaces list` to see all active recordings
 4. When done, `spaces stop <id>` or `spaces stop all`
 5. Transcribe with `spaces transcribe <file>`
+6. Summaries are generated automatically after transcription (skip with `--no-summarize`)
 
 ## Output
 
@@ -46,6 +55,7 @@ Files saved to `--output` dir (default: `~/Desktop`):
 - `space_<username>_<date>.m4a` — audio
 - `space_<username>_<date>.log` — progress log
 - `space_<username>_<date>.txt` — transcript
+- `space_<username>_<date>_summary.txt` — summary
 
 ## Whisper Models
 

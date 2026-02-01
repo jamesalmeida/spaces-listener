@@ -2,12 +2,13 @@
 
 Record and transcribe X/Twitter Spaces — live or replays.
 
-**Zero API costs.** Everything runs locally on your Mac.
+**Zero API costs by default.** Optional summaries use the OpenAI API.
 
 ## Features
 
 - 📥 **Audio recording** — Direct download via yt-dlp
 - 📝 **Auto-transcription** — Local Whisper (no API key)
+- 🧠 **Auto-summarization** — OpenAI summaries (optional)
 - ⏺️ **Live Spaces** — Record in real-time as they happen
 - 🔄 **Replays** — Download at full speed
 - 💰 **Free** — No API costs, no rate limits
@@ -48,6 +49,7 @@ spaces listen "https://x.com/i/spaces/1ABC..."
 | `--output`, `-o` | Output directory (default: ~/Desktop) |
 | `--model` | Whisper model: tiny/base/small/medium/large |
 | `--no-transcribe` | Skip transcription |
+| `--no-summarize` | Skip summarization |
 
 ### Examples
 
@@ -60,6 +62,17 @@ spaces listen "https://x.com/i/spaces/1ABC..." --model large
 
 # Save to specific folder
 spaces listen "https://x.com/i/spaces/1ABC..." -o ~/Spaces
+
+# Summarize a transcript
+spaces summarize ~/Desktop/space_transcript.txt
+```
+
+### Summaries require `OPENAI_API_KEY`
+
+Transcription runs locally. To enable summaries, export your OpenAI key:
+
+```bash
+export OPENAI_API_KEY="sk-..."
 ```
 
 ## Output
@@ -67,6 +80,7 @@ spaces listen "https://x.com/i/spaces/1ABC..." -o ~/Spaces
 Files saved to output directory:
 - `space_<username>_<date>.m4a` — Audio
 - `space_<username>_<date>.txt` — Transcript
+- `space_<username>_<date>_summary.txt` — Summary (requires `OPENAI_API_KEY`)
 
 ## Video Recording
 
@@ -108,7 +122,37 @@ Want video of the Space UI? Use **QuickTime Player**:
                                         ┌─────────────┐
                                         │    .txt     │
                                         │ (transcript)│
+                                        └──────┬──────┘
+                                               │
+                                               ▼
+                                        ┌─────────────┐
+                                        │   OpenAI    │
+                                        │ (summarize) │
+                                        └──────┬──────┘
+                                               │
+                                               ▼
+                                        ┌─────────────┐
+                                        │ _summary.txt│
                                         └─────────────┘
+```
+
+## Summary Examples
+
+```text
+Speakers
+- Host: @username
+- Guest: @guest
+
+Main Topics
+- Product roadmap and timelines
+- Community feedback and feature requests
+
+Key Insights
+- v2 release targeted for Q3
+- Focus on stability over new features
+
+Notable Moments
+- "We are prioritizing reliability this year."
 ```
 
 ## Whisper Models
