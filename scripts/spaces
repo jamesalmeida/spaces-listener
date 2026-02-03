@@ -487,7 +487,7 @@ listen() {
     
     local date_str
     date_str=$(date +%Y-%m-%d_%H%M)
-    local base_name="space_${username}_${date_str}"
+    local base_name="${date_str}_space_${username}"
     local space_dir="${OUTPUT_DIR}/${base_name}"
     mkdir -p "$space_dir"
     local audio_file="${space_dir}/recording.m4a"
