@@ -1,7 +1,7 @@
 ---
 name: spaces-listener
 description: Record, transcribe, and summarize X/Twitter Spaces — live or replays. Auto-downloads audio via yt-dlp, transcribes with Whisper, and generates AI summaries.
-version: 1.4.1
+version: 1.5.0
 author: jamesalmeida
 tags: [twitter, x, spaces, transcription, summarization, audio, recording]
 when: "User asks to record, transcribe, or listen to an X/Twitter Space"
@@ -73,11 +73,15 @@ For summaries, set `OPENAI_API_KEY` (transcription still works without it).
 
 ## Output
 
-Files saved to `--output` dir (default: `~/Desktop`):
-- `space_<username>_<date>.m4a` — audio
-- `space_<username>_<date>.log` — progress log
-- `space_<username>_<date>.txt` — transcript
-- `space_<username>_<date>_summary.txt` — summary
+Each space gets its own folder under `~/Desktop/Spaces/`:
+```
+~/Desktop/Spaces/
+  space_username_2026-02-03_1430/
+    recording.m4a     — audio
+    recording.log     — progress log
+    transcript.txt    — transcript
+    summary.txt       — summary
+```
 
 ## Whisper Models
 

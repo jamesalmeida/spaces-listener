@@ -4,12 +4,15 @@ set -euo pipefail
 # spaces-listener: Record and transcribe X/Twitter Spaces
 # Usage: spaces listen <url> [options]
 
-VERSION="1.4.1"
-OUTPUT_DIR="$HOME/Desktop"
+VERSION="1.5.0"
+OUTPUT_DIR="$HOME/Desktop/Spaces"
 WHISPER_MODEL="base"
 TRANSCRIBE=true
 SUMMARIZE=true
 SPACES_DIR="$HOME/.spaces-listener"
+
+# Allow globs to expand to nothing without error
+shopt -s nullglob
 
 # Ensure spaces directory exists
 mkdir -p "$SPACES_DIR"
@@ -30,7 +33,7 @@ USAGE:
     spaces help
 
 OPTIONS:
-    --output, -o DIR    Output directory (default: ~/Desktop)
+    --output, -o DIR    Output directory (default: ~/Desktop/Spaces)
     --model MODEL       Whisper model: tiny|base|small|medium|large (default: base)
     --no-transcribe     Skip auto-transcription when recording ends
     --no-summarize      Skip auto-summarization after transcription
@@ -82,7 +85,7 @@ extract_username() {
 
 get_next_id() {
     local max_id=0
-    for f in "$SPACES_DIR"/*.pid 2>/dev/null; do
+    for f in "$SPACES_DIR"/*.pid; do
         if [[ -f "$f" ]]; then
             local id
             id=$(basename "$f" .pid)
@@ -99,7 +102,7 @@ list_recordings() {
     echo "🎧 Active Recordings"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
-    for pid_file in "$SPACES_DIR"/*.pid 2>/dev/null; do
+    for pid_file in "$SPACES_DIR"/*.pid; do
         if [[ -f "$pid_file" ]]; then
             local id
             id=$(basename "$pid_file" .pid)
@@ -147,7 +150,7 @@ list_recordings() {
 clean_stale() {
     local cleaned_items=()
 
-    for pid_file in "$SPACES_DIR"/*.pid 2>/dev/null; do
+    for pid_file in "$SPACES_DIR"/*.pid; do
         if [[ -f "$pid_file" ]]; then
             local id
             id=$(basename "$pid_file" .pid)
@@ -163,7 +166,7 @@ clean_stale() {
         fi
     done
 
-    for meta_file in "$SPACES_DIR"/*.meta 2>/dev/null; do
+    for meta_file in "$SPACES_DIR"/*.meta; do
         if [[ -f "$meta_file" ]]; then
             local id
             id=$(basename "$meta_file" .meta)
@@ -244,7 +247,7 @@ stop_recording() {
     
     if [[ "$target" == "all" ]]; then
         local stopped=0
-        for pid_file in "$SPACES_DIR"/*.pid 2>/dev/null; do
+        for pid_file in "$SPACES_DIR"/*.pid; do
             if [[ -f "$pid_file" ]]; then
                 local id
                 id=$(basename "$pid_file" .pid)
@@ -331,8 +334,13 @@ transcribe_file() {
         --output_dir "$output_dir" 2>&1 | grep -v "^$" | tail -10
     
     local base_name
-    base_name=$(basename "$audio_file" .m4a)
+    base_name=$(basename "$audio_file")
+    base_name="${base_name%.*}"
     local transcript="${output_dir}/${base_name}.txt"
+    # If file is named "recording.m4a", rename transcript to "transcript.txt"
+    if [[ "$base_name" == "recording" ]]; then
+        transcript="${output_dir}/transcript.txt"
+    fi
     
     if [[ -f "$transcript" ]]; then
         echo ""
@@ -371,6 +379,10 @@ summarize_file() {
     base_name=$(basename "$transcript")
     base_name="${base_name%.*}"
     local summary_file="${output_dir}/${base_name}_summary.txt"
+    # If file is named "transcript.txt", rename summary to "summary.txt"
+    if [[ "$base_name" == "transcript" ]]; then
+        summary_file="${output_dir}/summary.txt"
+    fi
     
     local model="${SPACES_SUMMARY_MODEL:-gpt-4o-mini}"
     local payload
@@ -476,8 +488,10 @@ listen() {
     local date_str
     date_str=$(date +%Y-%m-%d_%H%M)
     local base_name="space_${username}_${date_str}"
-    local audio_file="${OUTPUT_DIR}/${base_name}.m4a"
-    local log_file="${OUTPUT_DIR}/${base_name}.log"
+    local space_dir="${OUTPUT_DIR}/${base_name}"
+    mkdir -p "$space_dir"
+    local audio_file="${space_dir}/recording.m4a"
+    local log_file="${space_dir}/recording.log"
     
     echo "🎧 Starting Space recording #$id..."
     echo "   URL: $url"
