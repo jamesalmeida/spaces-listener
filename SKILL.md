@@ -73,9 +73,9 @@ For summaries, set `OPENAI_API_KEY` (transcription still works without it).
 
 ## Output
 
-Each space gets its own folder under `~/Desktop/Spaces/`:
+Each space gets its own folder under `~/Dropbox/Tersono Cloud/Spaces/`:
 ```
-~/Desktop/Spaces/
+~/Dropbox/Tersono Cloud/Spaces/
   space_username_2026-02-03_1430/
     recording.m4a     — audio
     recording.log     — progress log
