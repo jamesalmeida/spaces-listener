@@ -1,9 +1,20 @@
 ---
 name: spaces-listener
 description: Record, transcribe, and summarize X/Twitter Spaces — live or replays. Auto-downloads audio via yt-dlp, transcribes with Whisper, and generates AI summaries.
-version: 1.4.0
+version: 1.4.1
 author: jamesalmeida
 tags: [twitter, x, spaces, transcription, summarization, audio, recording]
+when: "User asks to record, transcribe, or listen to an X/Twitter Space"
+examples:
+  - "Record this Space"
+  - "Transcribe this X Space"
+  - "Listen to this Twitter Space and transcribe it"
+  - "Download this Space audio"
+metadata:
+  openclaw:
+    requires:
+      bins: ["yt-dlp", "ffmpeg"]
+    emoji: "🎧"
 ---
 
 # spaces-listener
@@ -29,6 +40,9 @@ spaces status 1
 # Stop a recording
 spaces stop 1
 spaces stop all
+
+# Clean stale pid/meta files
+spaces clean
 
 # Transcribe when done
 spaces transcribe ~/Desktop/space.m4a --model medium

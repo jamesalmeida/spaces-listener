@@ -1,5 +1,7 @@
 # 🎧 spaces-listener
 
+Version: 1.4.1
+
 Record and transcribe X/Twitter Spaces — live or replays.
 
 **Zero API costs by default.** Optional summaries use the OpenAI API.
@@ -65,6 +67,9 @@ spaces listen "https://x.com/i/spaces/1ABC..." -o ~/Spaces
 
 # Summarize a transcript
 spaces summarize ~/Desktop/space_transcript.txt
+
+# Clean stale pid/meta files
+spaces clean
 ```
 
 ### Summaries require `OPENAI_API_KEY`
@@ -74,6 +79,8 @@ Transcription runs locally. To enable summaries, export your OpenAI key:
 ```bash
 export OPENAI_API_KEY="sk-..."
 ```
+
+Optional: set `SPACES_SUMMARY_MODEL` to override the summary model (default: `gpt-4o-mini`).
 
 ## Output
 
