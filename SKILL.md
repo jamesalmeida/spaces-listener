@@ -73,9 +73,9 @@ For summaries, set `OPENAI_API_KEY` (transcription still works without it).
 
 ## Output
 
-Each space gets its own folder under `~/Dropbox/Tersono Cloud/XSpaces/`:
+Each space gets its own folder under `~/Dropbox/ClawdBox/XSpaces/`:
 ```
-~/Dropbox/Tersono Cloud/XSpaces/
+~/Dropbox/ClawdBox/XSpaces/
   space_username_2026-02-03_1430/
     recording.m4a     — audio
     recording.log     — progress log

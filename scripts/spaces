@@ -5,7 +5,7 @@ set -euo pipefail
 # Usage: spaces listen <url> [options]
 
 VERSION="1.5.0"
-OUTPUT_DIR="$HOME/Dropbox/Tersono Cloud/XSpaces"
+OUTPUT_DIR="$HOME/Dropbox/ClawdBox/XSpaces"
 WHISPER_MODEL="base"
 TRANSCRIBE=true
 SUMMARIZE=true
