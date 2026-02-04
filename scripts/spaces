@@ -4,8 +4,9 @@ set -euo pipefail
 # spaces-listener: Record and transcribe X/Twitter Spaces
 # Usage: spaces listen <url> [options]
 
-VERSION="1.5.0"
+VERSION="1.6.0"
 OUTPUT_DIR="$HOME/Dropbox/ClawdBox/XSpaces"
+STAGING_DIR="/tmp/spaces-listener-staging"
 WHISPER_MODEL="base"
 TRANSCRIBE=true
 SUMMARIZE=true
@@ -15,7 +16,7 @@ SPACES_DIR="$HOME/.spaces-listener"
 shopt -s nullglob
 
 # Ensure spaces directory exists
-mkdir -p "$SPACES_DIR"
+mkdir -p "$SPACES_DIR" "$STAGING_DIR"
 
 show_help() {
     cat << EOF
@@ -488,8 +489,9 @@ listen() {
     local date_str
     date_str=$(date +%Y-%m-%d_%H%M)
     local base_name="${date_str}_space_${username}"
-    local space_dir="${OUTPUT_DIR}/${base_name}"
-    mkdir -p "$space_dir"
+    local final_dir="${OUTPUT_DIR}/${base_name}"
+    local space_dir="${STAGING_DIR}/${base_name}"
+    mkdir -p "$space_dir" "$final_dir"
     local audio_file="${space_dir}/recording.m4a"
     local log_file="${space_dir}/recording.log"
     
@@ -509,14 +511,21 @@ listen() {
 
     nohup bash -c '
         pid="$1"
-        audio_file="$2"
+        staging_dir="$2"
+        final_dir="$3"
+        audio_file="$4"
         while ps -p "$pid" >/dev/null 2>&1; do
             sleep 5
         done
-        if command -v openclaw >/dev/null 2>&1; then
-            openclaw gateway wake --text "Space recording complete: $audio_file" --mode now >/dev/null 2>&1 || true
+        # Copy completed files from staging to final output dir
+        if [[ -d "$staging_dir" ]]; then
+            cp -f "$staging_dir"/* "$final_dir"/ 2>/dev/null || true
         fi
-    ' bash "$pid" "$audio_file" >/dev/null 2>&1 &
+        final_audio="${final_dir}/$(basename "$audio_file")"
+        if command -v openclaw >/dev/null 2>&1; then
+            openclaw gateway wake --text "Space recording complete: $final_audio" --mode now >/dev/null 2>&1 || true
+        fi
+    ' bash "$pid" "$space_dir" "$final_dir" "$audio_file" >/dev/null 2>&1 &
 
     # Save PID and metadata
     echo "$pid" > "$SPACES_DIR/${id}.pid"
@@ -524,6 +533,7 @@ listen() {
 username=$username
 url=$url
 output=$audio_file
+final_dir=$final_dir
 log=$log_file
 started=$(date +%s)
 EOF
